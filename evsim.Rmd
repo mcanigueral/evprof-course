@@ -1,0 +1,138 @@
+---
+title: "Profiling EV users"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = F, warning = F, error = F, fig.width = 10)
+
+library(evsim)
+library(dplyr)
+library(lubridate)
+library(dygraphs)
+library(ggplot2)
+library(purrr)
+library(tidyr)
+```
+
+
+
+To simulate new sessions with our models we will make use of package [{evsim}](https://mcanigueral.github.io/evsim/). We need the following data:
+
+-   Number of sessions of each model
+-   User profiles proportions for each model
+-   Charging powers proportions
+
+We will compare the current demand with the demand obtained from our models for a certain period, for example the two first weeks of September 2019. The time series demand from a sessions data set can also be obtained with `evsim` package, using function `evsim::get_demand()`.
+
+
+```{r bau demand, eval=F}
+interval_mins <- 15
+start_date <- dmy(01022020) %>% as_datetime(tz = getOption('evprof.tzone')) %>% floor_date('day')
+end_date <- dmy(29022020) %>% as_datetime(tz = getOption('evprof.tzone')) %>% floor_date('day')
+dttm_seq <- seq.POSIXt(from = start_date, to = end_date, by = paste(interval_mins, 'min'))
+
+sessions_demand <- sessions_profiles %>% 
+  filter(between(ConnectionStartDateTime, start_date, end_date))
+
+demand <- sessions_demand %>% 
+  get_demand(dttm_seq)
+```
+
+We can plot the time-series demand with function `evsim::plot_ts`:
+
+```{r bau demand plot, fig.width=8}
+demand %>% plot_ts(fillGraph = T)
+```
+
+To simulate an equivalent type of sessions we have to find the following parameters:
+
+-   **Charging rates distribution**: We can get the current charging power distribution with function `get_charging_rates_distribution()`:
+
+```{r charging power distribution}
+charging_rates <- get_charging_rates_distribution(sessions_demand) %>% 
+  select(power, ratio)
+
+print(charging_rates)
+```
+
+-   **Number of sessions per day**: The daily number of sessions for each model
+
+```{r daily number of sessions}
+n_sessions <- sessions_demand %>% 
+  group_by(Timecycle) %>% 
+  summarise(n = n()) %>% 
+  # Divided by the monthly days of each time-cycle
+  mutate(n_day = round(n/c(16, 4, 4, 4))) %>% 
+  select(time_cycle = Timecycle, n_sessions = n_day)
+
+print(n_sessions)
+```
+
+-   **Profiles distribution**: The user profiles proportion for each model
+
+```{r profiles ratios}
+profiles_ratios <- sessions_demand %>% 
+  group_by(Timecycle, Profile) %>% 
+  summarise(n = n()) %>% 
+  mutate(ratio = n/sum(n)) %>% 
+  select(time_cycle = Timecycle, profile = Profile, ratio) %>% 
+  ungroup()
+
+head(profiles_ratios, 10)
+```
+
+Finally, the function `simulate_sessions()` requires the `dates` of the simulated sessions and the `interval_mins` as the time resolution (in minutes). Moreover, parameters `connection_log` and `energy_log` must be `TRUE` if the models have been built in a logarithmic scale.
+
+With all these parameters in hand we can simulate new sessions:
+
+```{r estimate sessions, eval=F}
+set.seed(1)
+sessions_estimated <- evsim::simulate_sessions(
+  evmodel = ev_model,
+  sessions_day = n_sessions,
+  user_profiles = profiles_ratios,
+  charging_powers = charging_rates, 
+  dates = unique(date(dttm_seq)), 
+  resolution = interval_mins
+)
+```
+
+```{r estimated sessions, eval=T, echo=F}
+# Check that the charging rates distribution is correct with:
+# sessions_estimated %>% get_charging_rates_distribution()
+
+head(sessions_estimated)
+```
+
+Finally, we can calculate the estimated demand and compare it with the real demand:
+
+```{r simualted demand, eval=F}
+estimated_demand <- sessions_estimated %>% 
+  get_demand(dttm_seq)
+  
+comparison_demand <- tibble(
+  datetime = dttm_seq,
+  demand_real = rowSums(demand[-1]),
+  demand_estimated = rowSums(estimated_demand[-1])
+) 
+```
+
+```{r, eval=F, echo=F}
+save(sessions_demand, sessions_estimated, demand, estimated_demand, comparison_demand, file = 'arnhem_data/arnhem_comparison_demand.RData')
+```
+
+```{r simualted demand plot, fig.width=8}
+comparison_demand %>% 
+  plot_ts(ylab = 'kW') %>% 
+  dygraphs::dySeries(
+    name = 'demand_real', label = 'Real demand', color = 'black', 
+    strokePattern = 'dashed', strokeWidth = 2
+  ) %>% 
+  dygraphs::dySeries(
+    name = 'demand_estimated', label = 'Estimated demand', color = 'navy', 
+    fillGraph = T
+  )
+```
+
+It is obvious that the two demand curves don't match perfectly because we are not doing a forecasting model but a simulation model, without inputs that predetermine a particular output. What we can compare is the day times where the demand peaks or valleys occur, and this is a positive comparison for our models, which coincide almost perfectly with the real demand. Moreover, the peak values are in general in concordance with the real peaks.
