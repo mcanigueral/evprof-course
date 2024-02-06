@@ -15,10 +15,10 @@ library(tidyr)
 ```
 
 
-For practicing purposes, a data set of charging sessions from the Dutch city of Arnhem has been provided in `data/arnhem_sessions.RDS`. Read it using function `readRDS`:
+For practicing purposes, a data set of charging sessions from the Dutch city of Arnhem has been provided in `data/ev_sessions.RDS`. Read it using function `readRDS`:
 
 ```{r read sessions}
-# 
+
 ```
 
 
